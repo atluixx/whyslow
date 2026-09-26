@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	old, err := collectors.ReadCPUStats()
+	cpuOld, err := collectors.ReadCPUStats()
 	if err != nil {
 		panic(err)
 	}
@@ -18,16 +18,23 @@ func main() {
 	for {
 		time.Sleep(300 * time.Millisecond)
 
-		now, err := collectors.ReadCPUStats()
+		memoryNow, err := collectors.ReadMemoryStats()
 		if err != nil {
 			panic(err)
 		}
 
-		usage := analyzers.CPUUsage(old, now)
+		cpuNow, err := collectors.ReadCPUStats()
+		if err != nil {
+			panic(err)
+		}
+
+		memoryUsage := analyzers.MemoryUsage(memoryNow)
+		cpuUsage := analyzers.CPUUsage(cpuOld, cpuNow)
 
 		ui.ClearScreen()
-		fmt.Printf("CPU Usage: %.2f%%\n", usage)
+		fmt.Printf("Memory Usage: %.2f%%\n", memoryUsage)
+		fmt.Printf("CPU Usage: %.2f%%\n", cpuUsage)
 
-		old = now
+		cpuOld = cpuNow
 	}
 }
