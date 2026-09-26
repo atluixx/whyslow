@@ -23,6 +23,11 @@ func main() {
 			panic(err)
 		}
 
+		loadUsage, err := collectors.ReadLoadStats()
+		if err != nil {
+			panic(err)
+		}
+
 		cpuNow, err := collectors.ReadCPUStats()
 		if err != nil {
 			panic(err)
@@ -34,6 +39,7 @@ func main() {
 		ui.ClearScreen()
 		fmt.Printf("Memory Usage: %.2f%%\n", memoryUsage)
 		fmt.Printf("CPU Usage: %.2f%%\n", cpuUsage)
+		fmt.Printf("Load Usage: %v\n", loadUsage)
 
 		cpuOld = cpuNow
 	}
