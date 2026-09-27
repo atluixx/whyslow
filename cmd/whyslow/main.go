@@ -33,13 +33,21 @@ func main() {
 			panic(err)
 		}
 
+		processes, err := collectors.ReadProcesses()
+		if err != nil {
+			panic(err)
+		}
+
 		memoryUsage := analyzers.MemoryUsage(memoryNow)
 		cpuUsage := analyzers.CPUUsage(cpuOld, cpuNow)
 
 		ui.ClearScreen()
 		fmt.Printf("Memory Usage: %.2f%%\n", memoryUsage)
 		fmt.Printf("CPU Usage: %.2f%%\n", cpuUsage)
-		fmt.Printf("Load Usage: %v\n", loadUsage)
+		fmt.Printf("Load Usage: %+v\n", loadUsage)
+		for _, process := range processes {
+			fmt.Printf("%s (%d) : %d\n", process.Name, process.PID, process.Memory)
+		}
 
 		cpuOld = cpuNow
 	}
