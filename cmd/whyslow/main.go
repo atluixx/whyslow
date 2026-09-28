@@ -1,7 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"flag"
 	"fmt"
+	"os"
+	"os/signal"
+	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/atluixx/whyslow/internal/analyzers"
@@ -9,82 +16,85 @@ import (
 	"github.com/atluixx/whyslow/internal/ui"
 )
 
-func main() {
-	cpuOld, err := collectors.ReadCPUStats()
-	if err != nil {
-		panic(err)
-	}
+type config struct {
+	interval time.Duration
+	top      int
+	color    bool
+}
 
+func main() {
+	configuration, err := parseConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "whyslow:", err)
+		os.Exit(2)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, configuration); err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintln(os.Stderr, "whyslow:", err)
+		os.Exit(1)
+	}
+}
+
+func parseConfig() (config, error) {
+	configuration := config{}
+	flag.DurationVar(&configuration.interval, "interval", time.Second, "refresh interval (for example: 500ms or 2s)")
+	flag.IntVar(&configuration.top, "top", 10, "number of processes to display")
+	flag.BoolVar(&configuration.color, "color", true, "use ANSI color")
+	flag.Parse()
+	if configuration.interval <= 0 {
+		return config{}, errors.New("interval must be greater than zero")
+	}
+	if configuration.top <= 0 {
+		return config{}, errors.New("top must be greater than zero")
+	}
+	return configuration, nil
+}
+
+func run(ctx context.Context, configuration config) error {
+	oldCPU, err := collectors.ReadCPUStats()
+	if err != nil {
+		return fmt.Errorf("read CPU statistics: %w", err)
+	}
 	oldProcesses, err := collectors.ReadProcesses()
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("read process statistics: %w", err)
 	}
-
+	ticker := time.NewTicker(configuration.interval)
+	defer ticker.Stop()
 	for {
-		time.Sleep(300 * time.Millisecond)
-
-		memoryNow, err := collectors.ReadMemoryStats()
+		select {
+		case <-ctx.Done():
+			fmt.Print("\x1b[0m\n")
+			return ctx.Err()
+		case <-ticker.C:
+		}
+		memory, err := collectors.ReadMemoryStats()
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("read memory statistics: %w", err)
 		}
-
-		loadStats, err := collectors.ReadLoadStats()
+		load, err := collectors.ReadLoadStats()
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("read load statistics: %w", err)
 		}
-
-		cpuNow, err := collectors.ReadCPUStats()
+		nowCPU, err := collectors.ReadCPUStats()
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("read CPU statistics: %w", err)
 		}
-
-		newProcesses, err := collectors.ReadProcesses()
+		nowProcesses, err := collectors.ReadProcesses()
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("read process statistics: %w", err)
 		}
-
-		memoryUsage := analyzers.MemoryUsage(memoryNow)
-		cpuUsage := analyzers.CPUUsage(cpuOld, cpuNow)
-		processesWithUsage := analyzers.ProcessUsage(oldProcesses, newProcesses, cpuOld, cpuNow)
-
-		ui.ClearScreen()
-
-		fmt.Printf("CPU Usage:    %6.2f%%\n", cpuUsage)
-		fmt.Printf("Memory Usage: %6.2f%%\n", memoryUsage)
-		fmt.Printf(
-			"Load Average: %.2f %.2f %.2f\n",
-			loadStats.Load1,
-			loadStats.Load5,
-			loadStats.Load15,
-		)
-
-		fmt.Println()
-		fmt.Println("Top Processes")
-		fmt.Println("-------------------------------------------------------------------")
-		fmt.Printf(
-			"%-8s %-25s %8s %8s %12s\n",
-			"PID",
-			"COMMAND",
-			"%CPU",
-			"THREADS",
-			"RSS",
-		)
-		fmt.Println("-------------------------------------------------------------------")
-
-		limit := min(len(processesWithUsage), 10)
-
-		for _, p := range processesWithUsage[:limit] {
-			fmt.Printf(
-				"%-8d %-25s %7.2f%% %8d %10.2f MB\n",
-				p.PID,
-				p.Name,
-				p.CPUUsage,
-				p.Threads,
-				float64(p.RSS)/(1024*1024),
-			)
+		activity := analyzers.CPUActivity(oldCPU, nowCPU)
+		processes := analyzers.ProcessUsage(oldProcesses, nowProcesses, oldCPU, nowCPU)
+		if len(processes) > configuration.top {
+			processes = processes[:configuration.top]
 		}
-
-		cpuOld = cpuNow
-		oldProcesses = newProcesses
+		ui.Render(os.Stdout, ui.Dashboard{
+			CPUUsage: activity.Usage, Iowait: activity.Iowait, MemoryUsage: analyzers.MemoryUsage(memory), SwapUsage: analyzers.SwapUsage(memory),
+			Load: load, Processes: processes, RefreshLabel: configuration.interval.String(),
+			Diagnoses: analyzers.Diagnose(activity, memory, load, runtime.NumCPU(), processes),
+		}, configuration.color)
+		oldCPU, oldProcesses = nowCPU, nowProcesses
 	}
 }
