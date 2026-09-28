@@ -30,6 +30,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	defer ui.Restore(os.Stdout)
 	if err := run(ctx, configuration); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "whyslow:", err)
 		os.Exit(1)
@@ -65,7 +66,6 @@ func run(ctx context.Context, configuration config) error {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Print("\x1b[0m\n")
 			return ctx.Err()
 		case <-ticker.C:
 		}
@@ -93,6 +93,7 @@ func run(ctx context.Context, configuration config) error {
 		ui.Render(os.Stdout, ui.Dashboard{
 			CPUUsage: activity.Usage, Iowait: activity.Iowait, MemoryUsage: analyzers.MemoryUsage(memory), SwapUsage: analyzers.SwapUsage(memory),
 			Load: load, Processes: processes, RefreshLabel: configuration.interval.String(),
+			UpdatedAt: time.Now(),
 			Diagnoses: analyzers.Diagnose(activity, memory, load, runtime.NumCPU(), processes),
 		}, configuration.color)
 		oldCPU, oldProcesses = nowCPU, nowProcesses
