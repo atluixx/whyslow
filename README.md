@@ -4,8 +4,8 @@
 `htop` replacement: it samples system telemetry over time and answers the more
 useful question, **“what evidence suggests my machine is slow?”**
 
-It uses only local Linux `/proc` and `/sys` data. It sends no telemetry,
-requires no daemon, and keeps no data after it exits.
+It uses only local Linux `/proc` and `/sys` data. It sends no telemetry and
+keeps diagnostic history only in memory while it runs.
 
 ## Run
 
@@ -22,6 +22,38 @@ go run ./cmd/whyslow --help
 ```
 
 The dashboard refreshes every second by default. Press `Ctrl-C` to exit.
+
+## Command and service lifecycle
+
+```text
+whyslow                 Run the interactive dashboard (same as `whyslow run`)
+whyslow run             Explicitly run the dashboard in the foreground
+whyslow status          Show the installed systemd service status
+whyslow start|stop|restart
+whyslow install         Install and enable the systemd service (root required)
+whyslow uninstall       Stop and remove files created by install (root required)
+whyslow version         Print the build version
+whyslow help            Show command help
+```
+
+`install` copies the current executable to `/usr/local/bin/whyslow`, installs
+only the managed `/etc/systemd/system/whyslow.service` unit, reloads systemd,
+and enables the service. It does **not** start it; use `whyslow start` when
+ready. Installation never invokes `sudo` itself and refuses to overwrite an
+unmanaged binary or unit.
+
+The service runs `whyslow service` as a normal foreground process. systemd—not
+whyslow—handles supervision, restarts, journald logging, and background
+execution. The service uses `DynamicUser` and systemd hardening settings; it
+does not need a graphical session or elevated privileges while monitoring.
+
+Build a release with an injected version:
+
+```sh
+make build VERSION=0.1.0
+# or:
+go build -ldflags "-X main.Version=0.1.0" -o whyslow ./cmd/whyslow
+```
 
 ## Architecture
 
