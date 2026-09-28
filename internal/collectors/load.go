@@ -1,6 +1,7 @@
 package collectors
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -13,8 +14,14 @@ func ReadLoadStats() (models.LoadStats, error) {
 	if err != nil {
 		return models.LoadStats{}, err
 	}
+	return parseLoadStats(data)
+}
 
-	fields := strings.Fields(string(data))[:3]
+func parseLoadStats(data []byte) (models.LoadStats, error) {
+	fields := strings.Fields(string(data))
+	if len(fields) < 3 {
+		return models.LoadStats{}, fmt.Errorf("unexpected /proc/loadavg format")
+	}
 	parse := func(value string) (float64, error) {
 		parsed, err := strconv.ParseFloat(value, 64)
 		if err != nil {
@@ -26,7 +33,7 @@ func ReadLoadStats() (models.LoadStats, error) {
 
 	values := make([]float64, 3)
 
-	for i, v := range fields {
+	for i, v := range fields[:3] {
 		parsed, err := parse(v)
 		if err != nil {
 			return models.LoadStats{}, err
