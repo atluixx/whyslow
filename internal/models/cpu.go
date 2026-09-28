@@ -12,3 +12,10 @@ type CPUStats struct {
 	Guest     uint64
 	GuestNice uint64
 }
+
+// CPUActivity describes CPU use over one sampling interval.
+type CPUActivity struct {
+	Usage      float64
+	Iowait     float64
+	TotalTicks uint64
+}
