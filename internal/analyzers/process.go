@@ -11,25 +11,24 @@ func ProcessUsage(
 	oldProcesses, nowProcesses []models.ProcessStats,
 	oldCPU, nowCPU models.CPUStats,
 ) []models.ProcessStats {
+	return ProcessUsageWithCPUCount(oldProcesses, nowProcesses, oldCPU, nowCPU, runtime.NumCPU())
+}
+
+// ProcessUsageWithCPUCount calculates per-process CPU percentage, where 100%
+// represents one fully busy CPU. cpuCount is injectable for deterministic tests.
+func ProcessUsageWithCPUCount(
+	oldProcesses, nowProcesses []models.ProcessStats,
+	oldCPU, nowCPU models.CPUStats,
+	cpuCount int,
+) []models.ProcessStats {
 	oldByPID := make(map[int]models.ProcessStats)
 
 	for _, process := range oldProcesses {
 		oldByPID[process.PID] = process
 	}
 
-	user := nowCPU.User - oldCPU.User
-	nice := nowCPU.Nice - oldCPU.Nice
-	system := nowCPU.System - oldCPU.System
-	idle := nowCPU.Idle - oldCPU.Idle
-	iowait := nowCPU.Iowait - oldCPU.Iowait
-	irq := nowCPU.IRQ - oldCPU.IRQ
-	softirq := nowCPU.SoftIRQ - oldCPU.SoftIRQ
-	steal := nowCPU.Steal - oldCPU.Steal
-
-	busy := user + nice + system + irq + softirq + steal
-	systemDelta := busy + idle + iowait
-
-	if systemDelta == 0 {
+	activity := CPUActivity(oldCPU, nowCPU)
+	if activity.TotalTicks == 0 || cpuCount <= 0 {
 		return nil
 	}
 
@@ -41,12 +40,16 @@ func ProcessUsage(
 			continue
 		}
 
+		// A PID may have been reused, or a process counter may have reset.
+		if process.CPUTime < previous.CPUTime {
+			continue
+		}
 		delta := process.CPUTime - previous.CPUTime
 
 		process.CPUUsage =
 			float64(delta) /
-				float64(systemDelta) *
-				float64(runtime.NumCPU()) *
+				float64(activity.TotalTicks) *
+				float64(cpuCount) *
 				100
 
 		result = append(result, process)
