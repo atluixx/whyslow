@@ -11,8 +11,15 @@ func MemoryUsage(stats models.MemoryStats) float64 {
 }
 
 func SwapUsage(stats models.MemoryStats) float64 {
-	if stats.SwapTotal == 0 || stats.SwapFree > stats.SwapTotal {
+	if stats.SwapTotal == 0 {
 		return 0
 	}
-	return float64(stats.SwapTotal-stats.SwapFree) / float64(stats.SwapTotal) * 100
+	return float64(SwapUsed(stats)) / float64(stats.SwapTotal) * 100
+}
+
+func SwapUsed(stats models.MemoryStats) uint64 {
+	if stats.SwapFree > stats.SwapTotal {
+		return 0
+	}
+	return stats.SwapTotal - stats.SwapFree
 }

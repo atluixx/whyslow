@@ -53,14 +53,11 @@ func parseConfig() (config, error) {
 }
 
 func run(ctx context.Context, configuration config) error {
-	oldCPU, err := collectors.ReadCPUStats()
+	oldSnapshot, err := collectors.CollectSnapshot()
 	if err != nil {
-		return fmt.Errorf("read CPU statistics: %w", err)
+		return fmt.Errorf("collect initial snapshot: %w", err)
 	}
-	oldProcesses, err := collectors.ReadProcesses()
-	if err != nil {
-		return fmt.Errorf("read process statistics: %w", err)
-	}
+	history := analyzers.NewHistory(120)
 	ticker := time.NewTicker(configuration.interval)
 	defer ticker.Stop()
 	for {
@@ -69,33 +66,20 @@ func run(ctx context.Context, configuration config) error {
 			return ctx.Err()
 		case <-ticker.C:
 		}
-		memory, err := collectors.ReadMemoryStats()
+		nowSnapshot, err := collectors.CollectSnapshot()
 		if err != nil {
-			return fmt.Errorf("read memory statistics: %w", err)
+			return fmt.Errorf("collect snapshot: %w", err)
 		}
-		load, err := collectors.ReadLoadStats()
-		if err != nil {
-			return fmt.Errorf("read load statistics: %w", err)
-		}
-		nowCPU, err := collectors.ReadCPUStats()
-		if err != nil {
-			return fmt.Errorf("read CPU statistics: %w", err)
-		}
-		nowProcesses, err := collectors.ReadProcesses()
-		if err != nil {
-			return fmt.Errorf("read process statistics: %w", err)
-		}
-		activity := analyzers.CPUActivity(oldCPU, nowCPU)
-		processes := analyzers.ProcessUsage(oldProcesses, nowProcesses, oldCPU, nowCPU)
+		analysis := analyzers.Analyze(oldSnapshot, nowSnapshot, history, runtime.NumCPU())
+		processes := analysis.Processes
 		if len(processes) > configuration.top {
 			processes = processes[:configuration.top]
 		}
 		ui.Render(os.Stdout, ui.Dashboard{
-			CPUUsage: activity.Usage, Iowait: activity.Iowait, MemoryUsage: analyzers.MemoryUsage(memory), SwapUsage: analyzers.SwapUsage(memory),
-			Load: load, Processes: processes, RefreshLabel: configuration.interval.String(),
-			UpdatedAt: time.Now(),
-			Diagnoses: analyzers.Diagnose(activity, memory, load, runtime.NumCPU(), processes),
+			CPUUsage: analysis.Activity.Usage, Iowait: analysis.Activity.Iowait, MemoryUsage: analysis.MemoryUsage, SwapUsed: analysis.SwapUsed, SwapUsage: analysis.SwapUsage,
+			Load: nowSnapshot.Load, Disk: analysis.Disk, MaxTemperature: analysis.MaxTemperature, TemperatureAvailable: analysis.TemperatureAvailable,
+			Processes: processes, RefreshLabel: configuration.interval.String(), UpdatedAt: nowSnapshot.Timestamp, Diagnoses: analysis.Diagnoses, Events: analysis.Events,
 		}, configuration.color)
-		oldCPU, oldProcesses = nowCPU, nowProcesses
+		oldSnapshot = nowSnapshot
 	}
 }

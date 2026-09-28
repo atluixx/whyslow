@@ -3,6 +3,7 @@ package analyzers
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/atluixx/whyslow/internal/models"
 )
@@ -32,34 +33,70 @@ func TestMemoryAndSwapUsageInvalidValues(t *testing.T) {
 	}
 }
 
+func TestSwapUsage(t *testing.T) {
+	if got := SwapUsage(models.MemoryStats{SwapTotal: 100, SwapFree: 25}); got != 75 {
+		t.Fatalf("got %.2f, want 75", got)
+	}
+	if got := SwapUsed(models.MemoryStats{SwapTotal: 100, SwapFree: 25}); got != 75 {
+		t.Fatalf("got %d, want 75", got)
+	}
+}
+
 func TestProcessUsageSkipsCounterReset(t *testing.T) {
-	cpuOld := models.CPUStats{Idle: 100}
-	cpuNow := models.CPUStats{Idle: 200}
-	processes := ProcessUsageWithCPUCount(
-		[]models.ProcessStats{{PID: 1, CPUTime: 50}},
-		[]models.ProcessStats{{PID: 1, CPUTime: 10}, {PID: 2, CPUTime: 20}},
-		cpuOld, cpuNow, 1,
-	)
+	processes := ProcessUsageWithCPUCount([]models.ProcessStats{{PID: 1, CPUTime: 50}}, []models.ProcessStats{{PID: 1, CPUTime: 10}, {PID: 2, CPUTime: 20}}, models.CPUStats{Idle: 100}, models.CPUStats{Idle: 200}, 1)
 	if len(processes) != 0 {
 		t.Fatalf("expected reset and new processes to be omitted, got %#v", processes)
 	}
 }
 
-func TestDiagnose(t *testing.T) {
-	diagnoses := Diagnose(
-		models.CPUActivity{Usage: 90, Iowait: 20},
-		models.MemoryStats{Total: 100, Available: 5, SwapTotal: 100, SwapFree: 80},
-		models.LoadStats{Load1: 8}, 4,
-		[]models.ProcessStats{{PID: 12, Name: "hog", CPUUsage: 50}},
-	)
-	if len(diagnoses) != 6 {
-		t.Fatalf("expected six diagnoses, got %#v", diagnoses)
+func TestDiskUsage(t *testing.T) {
+	activity := DiskUsage(models.DiskStats{SectorsRead: 10, SectorsWritten: 20, IOTimeMillis: 100}, models.DiskStats{SectorsRead: 210, SectorsWritten: 120, IOTimeMillis: 600}, time.Second)
+	if activity.ReadBytesPerSec != 200*diskSectorBytes || activity.WriteBytesPerSec != 100*diskSectorBytes || activity.IOBusyPercent != 50 {
+		t.Fatalf("unexpected disk activity: %#v", activity)
+	}
+	if got := DiskUsage(models.DiskStats{SectorsRead: 100}, models.DiskStats{SectorsRead: 1}, time.Second); got != (DiskActivity{}) {
+		t.Fatalf("counter reset must be ignored: %#v", got)
 	}
 }
 
-func TestDiagnoseHealthy(t *testing.T) {
-	diagnoses := Diagnose(models.CPUActivity{Usage: 10}, models.MemoryStats{Total: 100, Available: 80}, models.LoadStats{Load1: 1}, 4, nil)
-	if len(diagnoses) != 1 || diagnoses[0].Level != "ok" {
-		t.Fatalf("expected healthy diagnosis, got %#v", diagnoses)
+func TestDiagnosisRequiresSustainedPressure(t *testing.T) {
+	history := NewHistory(10)
+	old := models.Snapshot{Timestamp: time.Unix(0, 0), CPU: models.CPUStats{Idle: 100}}
+	for i := 1; i <= 2; i++ {
+		now := models.Snapshot{Timestamp: time.Unix(int64(i), 0), CPU: models.CPUStats{User: uint64(i * 100), Idle: 100}}
+		analysis := Analyze(old, now, history, 1)
+		if analysis.Diagnoses[0].Severity != models.SeverityOK {
+			t.Fatalf("sample %d should not yet diagnose: %#v", i, analysis.Diagnoses)
+		}
+		old = now
+	}
+	old.Processes = []models.ProcessStats{{PID: 1, Name: "hog", CPUTime: 200}}
+	now := models.Snapshot{Timestamp: time.Unix(3, 0), CPU: models.CPUStats{User: 300, Idle: 100}, Processes: []models.ProcessStats{{PID: 1, Name: "hog", CPUTime: 300}}}
+	analysis := Analyze(old, now, history, 1)
+	if analysis.Diagnoses[0].Title != "CPU pressure" || len(analysis.Diagnoses[0].Contributors) != 1 {
+		t.Fatalf("expected sustained CPU diagnosis with contributor: %#v", analysis.Diagnoses)
+	}
+}
+
+func TestEventDeduplication(t *testing.T) {
+	history := NewHistory(4)
+	event := models.Event{Timestamp: time.Unix(1, 0), Severity: models.SeverityWarning, Message: "CPU pressure"}
+	if !history.SetCondition("cpu", true, event) || history.SetCondition("cpu", true, event) || len(history.Events()) != 1 {
+		t.Fatalf("expected one event, got %#v", history.Events())
+	}
+	history.SetCondition("cpu", false, models.Event{})
+	if !history.SetCondition("cpu", true, event) || len(history.Events()) != 2 {
+		t.Fatalf("expected event after condition recovery, got %#v", history.Events())
+	}
+}
+
+func TestMemoryDiagnosisThreshold(t *testing.T) {
+	history := NewHistory(4)
+	for i := 0; i < 3; i++ {
+		history.AddSample(models.Sample{MemoryUsage: 91})
+	}
+	diagnoses := diagnoses(history, models.Sample{MemoryUsage: 91}, 4, nil, false)
+	if len(diagnoses) != 1 || diagnoses[0].Title != "Memory pressure" || diagnoses[0].Severity != models.SeverityCritical {
+		t.Fatalf("unexpected memory diagnosis: %#v", diagnoses)
 	}
 }
